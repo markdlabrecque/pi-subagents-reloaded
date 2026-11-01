@@ -44,7 +44,7 @@ Resolved through [Define supervisor authority and director control](https://gith
 - Every top-level agent is a director, automatically identified at creation without registration or opt-in, whether it owns workers or not. A session resume preserves director identity; a fork or separate top-level agent gets a new identity.
 - Each director can spawn workers within its existing tool authority and resource limits. It manages only its own worker group and cannot spawn on another director's behalf while claiming that director as owner.
 - The owning parent alone approves worker tool grants and instruction/context revisions. There is no automatic ownership transfer, super-agent allowlist or cross-director control in v1.
-- Director cancellation stops its current activity without automatically cancelling workers. Explicit director retirement cascades to its workers; normal parent exit also shuts workers down. Detailed shutdown behavior remains a lifecycle decision.
+- Director cancellation stops its current activity without automatically cancelling workers. Explicit director retirement cascades to its workers; normal parent exit also shuts workers down. Shutdown follows the lifecycle contract below.
 - Parent loss never grants pending requests. Messaging and approvals are live-parent operations, not offline queues.
 - This is a trusted-local-agent model, not OS containment.
 - Automatic director identity across interactive, SDK and RPC entry points remains a feasibility check. It does not imply a global registry or remote management authority.
@@ -87,10 +87,41 @@ Approved revisions, exact-content restoration, parent approval, follow-up valida
 - SA-10 No parent may delegate greater authority than it possesses. Denied/unanswered requests never auto-grant.
 - SA-11 Verify Pi supports runtime tool changes; otherwise enforce via guarded tool proxy or safe-point reconfiguration.
 ### Lifecycle
-- SA-12 Normal states: created → starting → running → completing → idle → running (follow-up) or retiring → retired.
-- SA-13 Define failed, cancelled and disconnected outcomes, including partial startup and orphan cleanup; these do not imply automatic recovery.
-- SA-14 Completion is not retirement. Follow-ups must be tied to original assignment.
-- SA-15 Director retirement gracefully cancels all workers, escalates after timeout, and retains logs/worktrees unless explicitly cleaned.
+Resolved through [Define one-shot and ongoing session lifecycle](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/3). These are required extension behaviors, not claims about native Pi guarantees.
+
+#### Worker states and turn outcomes
+- `created`: identity, fixed ownership and immutable assignment recorded; no runtime launched yet.
+- `starting`: launching or explicitly recreating the runtime; not ready for follow-ups.
+- `running`: one turn is active, including tool execution or waiting for input or permission.
+- `completing`: finalizing the turn's result and confirming runtime readiness. Only after the parent extension records the result and confirms readiness does the worker become idle. This is local bookkeeping, not acknowledgment from the parent model.
+- `idle`: no active turn; context retained and ready for a related follow-up.
+- `unavailable`: runtime failed or disconnected; no work accepted.
+- `retiring`: permanently closing the worker and confirming shutdown.
+- `retired`: managed lifetime ended; cannot resume or recreate.
+
+Normal progression is created → starting → running → completing → idle. A related follow-up moves idle → running. Retirement is separate from turn completion and may begin from any non-retired state.
+
+One-shot and ongoing work use the same lifecycle, without a permanent mode flag. One-shot means no follow-up is expected, not automatic retirement. Explicit follow-ups are accepted only when idle; reject early submissions with the current state rather than silently queueing them. Input during running or completing uses the separately defined live-messaging contract and cannot start overlapping turns.
+
+Completed, cancelled and failed describe turn outcomes, not permanent worker states. Completion or safe cancellation leaves the worker idle. A failed turn may also leave it idle if the runtime remains usable. A failed tool command alone is not a failed turn. Cancellation pending is a flag on an active turn, not another worker state. Waiting for input or permission does not itself complete the turn.
+
+#### Cancellation and shutdown
+Cancellation stops the current turn without retiring the worker or discarding context. Report cancellation as pending until stopping is confirmed. Cancellation does not undo file changes or reverse external effects.
+
+The parent extension's recorded ordering settles completion/cancellation races. If completion is recorded first, cancellation returns already completed. If cancellation is accepted first, the turn is cancelled once stopping is confirmed, even if completion arrives late. Keep partial results inspectable. A disconnect during completion is not silently recorded as success.
+
+Cancellation, retirement and normal parent exit use bounded shutdown even during an active tool. Configurable defaults are five seconds for cooperative cancellation, then termination of the worker runtime and its managed subprocesses, then another two seconds before force-killing them. Detached processes and reversal of external effects are not covered. If cancellation kills the runtime, the worker becomes unavailable rather than idle.
+
+Retirement and parent exit prevent new turns, messages that trigger work and tool invocations as soon as shutdown begins. Remain retiring until managed-runtime shutdown is confirmed; uncertainty must be reported rather than marked retired. Repeated retirement requests are safe and do not reset the deadline. Explicit director retirement cascades to its workers; director cancellation alone does not. Preserve transcripts, logs and worktrees; cleanup requires separate authorization.
+
+#### Startup, runtime failure and disconnection
+Startup failure makes that worker unavailable, reports the failure and shuts down any partially started process using the bounded sequence. There is no automatic retry. The parent may explicitly spawn a replacement with a new worker identity. Preserve transcripts and files already created.
+
+Runtime death during a turn fails the turn and makes the worker unavailable. There is no automatic recreation. While the parent remains alive, it may explicitly recreate the runtime for the same worker only when the original assignment, active approved instruction/context revision and usable conversation can be restored. Never automatically replay an interrupted turn or tool call. If restoration is impossible, use a new replacement worker.
+
+Loss of the parent-worker control connection makes the worker unavailable even if its process may still be alive. The interrupted turn's outcome is unknown unless a result was already recorded. Attempt bounded shutdown of the known process. Do not accept follow-ups or launch a second runtime while the original might still execute. No automatic reconnection or reattachment is promised.
+
+Detailed detection, orphan reporting and manual cleanup remain with [Define parent-lifetime failure boundaries and orphan handling](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/9). Idle timeout and resource policy remain with [Define v1 resource, workspace and retention policies](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/11).
 ### Parent lifetime and failure boundaries
 - SA-16 Code-level process monitoring does not consume model tokens.
 - SA-17 Normal parent exit shuts down its workers and preserves transcripts and worktrees.
@@ -122,7 +153,14 @@ Authenticate parent-worker communication and enforce owner-only operations, leas
 - [ ] Compaction and controlled worker-runtime recreation preserve the assignment and active approved revision while the parent remains running. Missing approved contents pause work instead of silently loading replacements.
 - [ ] Worker requests a tool and continues work; approval takes effect safely.
 - [ ] Sibling grant allows only specified recipient; revocation and expiry work.
-- [ ] Completion idles; related follow-up resumes; parent retires.
+- [ ] One-shot and ongoing work share one lifecycle. Completion records a result and confirms readiness before idling; only an explicit related follow-up from idle starts another turn.
+- [ ] Safe cancellation preserves context and leaves the worker idle. Runtime-killing cancellation leaves it unavailable; cancellation remains pending until stopping is confirmed.
+- [ ] Recorded completion/cancellation ordering determines the outcome; late completion cannot override accepted cancellation. Partial results remain inspectable.
+- [ ] Startup failure reports unavailable, shuts down partial processes and preserves artifacts without automatic retry.
+- [ ] Runtime death fails the active turn. Explicit recreation requires restorable assignment, approved context and conversation, a live parent and no possibly executing old runtime. Interrupted work is not automatically replayed.
+- [ ] Control disconnection blocks work and reports an unknown interrupted outcome unless already recorded; no automatic reconnection or reattachment occurs.
+- [ ] Retirement and parent exit immediately block new work and use configurable five-second cooperative and two-second termination grace periods before force-kill escalation, including active tools.
+- [ ] Retirement is irreversible and reported complete only after confirmed shutdown. Repeated requests do not reset the deadline; transcripts and worktrees remain intact.
 - [ ] Normal parent exit shuts down workers while preserving transcripts and worktrees.
 - [ ] Parent crash is reported as unsupported for automatic recovery; orphan cleanup and lost live requests are documented without implying safe continued work.
 - [ ] Parent loss never approves a pending request.
@@ -138,7 +176,7 @@ This decision map specifies behavior only. Implementation planning follows once 
 A supervisor, durable delivery/recovery and cross-director control may be reconsidered later if needed. They are not prerequisites or scheduled implementation phases for v1.
 
 ## Open questions
-Default idle timeout, maximum workers, live resource and queue limits, retention, worktree provisioning, shutdown escalation, crash/orphan reporting, actual Pi extension hooks, automatic director identity across entry points, safe live tool updates and the minimal optional Navigator contract.
+Default idle timeout, maximum workers, live resource and queue limits, retention, worktree provisioning, crash/orphan reporting, actual Pi extension hooks, automatic director identity across entry points, safe live tool updates and the minimal optional Navigator contract.
 
 ---
 
