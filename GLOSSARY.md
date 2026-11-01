@@ -33,6 +33,12 @@ Related input that starts another turn on a worker's existing assignment. An aut
 **Tool grant**:
 Authority approved by the owning parent for a worker to invoke an identified tool within its approved scope. It has no timed expiry and lasts until explicit revocation, worker retirement, worker-runtime death or parent-session termination.
 
+**Delegable authority**:
+The tool authority a parent may grant to its workers under its explicit parent-local authorization policy. It is distinct from tool discovery, exposure and runtime availability.
+
+**MCP provider identity**:
+The parent-approved identity of a configured MCP provider, including its transport, endpoint or executable configuration, and credential/account selection. A server alias or advertised name alone is not that identity.
+
 **Permission request**:
 A worker's correlated request to its owning parent for tool authority, with a rationale and requested scope. A request is distinct from a grant and does not itself authorize access.
 

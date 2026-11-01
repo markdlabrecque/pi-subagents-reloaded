@@ -1,6 +1,6 @@
 # Tool grant feasibility and consistency check
 
-Follow-up for [Define tool grants, revocation, and access requests](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/6). Confirmed decisions in `1e4665d` remain unchanged. The ticket is not ready to close because admission timing, provider identity and the root parent's authority need clarification.
+Follow-up for [Define tool grants, revocation, and access requests](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/6). Confirmed decisions in `1e4665d` remain unchanged. The user confirmed all three final clarifications below after reviewing this check. The permission decision is resolved; enforcement remains extension implementation work, not a verified end-to-end Pi capability.
 
 ## Evidence and limits
 
@@ -39,17 +39,19 @@ The extension must keep discovery distinct from permission, deny newly discovere
 
 Pi names MCP tools using a configured server alias and tool name. Tool execution obtains the current client under that alias. Reconnection or replacement can select a new connection, and reconnect/retry can occur inside the MCP operation without another `tool_call`. These mechanisms do not establish a grant-bound verified provider identity. See [MCP tool definitions][mcp-tools], `createMcpToolDefinition`, [MCP registration][mcp-index], `registerTools`, and [MCP runtime][mcp-runtime], `withClient`.
 
-The requirement that a changed provider receive fresh approval is therefore extension behavior. Neither matching aliases, matching advertised tool names nor successful reconnection proves it. The specification needs a definition of which configured provider properties establish identity before an implementation can verify sameness.
+The requirement that a changed provider receive fresh approval is therefore extension behavior. Neither matching aliases, matching advertised tool names nor successful reconnection proves it. The confirmed configured-provider identity contract below defines which properties establish sameness; Pi does not enforce that contract for the extension.
 
-## Consistency findings requiring discussion
+## Confirmed resolution of consistency findings
 
-1. **Approved but not started calls.** The PRD exempts an "already-authorized running tool" from interruption. Pi separates approval from execution and can defer execution of an approved batch. Does authorization admission make such a call in-flight, or must revocation/disconnection prevent it from starting? Recommendation: require current authority at execution admission; only calls already admitted to execution keep the non-interruption exception. Do not equate an earlier hook return or `tool_execution_start` event with that admission.
-2. **Verified provider identity.** What counts as the same MCP provider? Recommendation: bind grants to a parent-approved configured provider identity, including transport and endpoint or executable configuration plus credential/account selection, rather than a server alias or claimed name. Credential rotation for the same approved account need not itself change identity. This does not promise cryptographic attestation of remote software or detection of every server-side change. The exact identity contract still needs confirmation.
-3. **Root parent authority.** The PRD prohibits delegation beyond the parent's current authority but does not define that authority for a top-level director. Pi distinguishes registered, active and callable sets and provides no native delegation policy. Recommendation: an explicit parent-local authorization policy defines delegable authority; exposure and discovery do not grant it. Runtime availability remains a separate constraint. Whether the initial policy includes all configured tools or only an explicit selection remains a user decision.
+The user accepted all three recommendations in live discussion. These clarify the existing permission contract without selecting an implementation.
+
+1. Revocation or disconnection blocks approved-but-not-started calls, including prepared parallel calls. Current authority and actual invocation arguments must be checked at execution admission. Only execution-admitted calls keep the non-interruption exception. An earlier hook return or `tool_execution_start` event is not that admission.
+2. MCP grants bind to parent-approved transport, endpoint or executable configuration, and credential/account selection, not a server alias or claimed name. Changed identity requires fresh approval. Credential rotation for the same approved account does not itself change identity. This does not promise remote-software attestation or detection of every server-side change.
+3. An explicit parent-local authorization policy defines the root director's delegable authority. Its initial contents are an explicit tool selection, not every configured tool. Registration, activation, exposure, discovery and callability do not grant delegation authority. Runtime availability remains a separate constraint.
 
 The remaining confirmed requirements are consistent with the glossary and lifecycle section. No timed expiry or renewal is required. Completion and idle time preserve grants; runtime recreation requires fresh grants. Peer authorization is rechecked at delivery. Minimal transcript-linked history is evidence, not replayable authority.
 
-Earlier issue text and map notes still mention duration, expiry and restoration of valid grants. The final confirmed comment and `1e4665d` supersede those statements; they must not be used as implementation requirements. No product decision has been changed by this check.
+Earlier issue text, map notes and comments mentioned duration, expiry and restoration of valid grants. The no-timed-expiry decision and `1e4665d` supersede those statements; they must not be used as implementation requirements. The final resolution preserves those decisions and records the three user-confirmed clarifications above.
 
 ## Source references
 
