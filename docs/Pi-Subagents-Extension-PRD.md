@@ -8,7 +8,7 @@ A reusable Pi extension to spawn isolated coding workers, communicate asynchrono
 2. Flat worker hierarchy: a worker cannot spawn another worker. Every top-level agent is a director, whether it owns workers or not.
 3. A worker has one original assignment; it may receive related follow-ups, but not unrelated assignments.
 4. Parent-worker messaging is asynchronous while the parent is running. Default delivery is at safe checkpoints; optional urgent delivery requires parent authorization. Durable delivery, replay and offline queues are out of scope.
-5. Workers can request more tools, with rationale, scope and duration, without blocking unrelated work. Parent can approve, narrow or deny.
+5. Workers receive a parent-removable default inspection set and can request more tools with rationale and scope without blocking unrelated work. Only the owning parent can approve, narrow or deny. Grants have no timed expiry; they end on explicit revocation, retirement, worker-runtime death or parent-session termination.
 6. Sibling messaging is off by default. A worker may request a scoped messaging tool; the parent approves permitted recipients.
 7. Completion and retirement are separate: completed workers idle and retain context. An authorized parent or peer message wakes an idle worker on its existing assignment; retirement remains parent-controlled.
 8. Agent milestones and code-level heartbeats coexist. Suggested heartbeat every 15 seconds, suspect after three missed heartbeats.
@@ -102,14 +102,39 @@ Resolved through [Define parent and peer message delivery](https://github.com/ma
 - A sender-supplied request ID supports bounded live deduplication. Within the retained deduplication window, retrying the same send returns its existing message ID rather than delivering it twice. Reusing that ID with different contents is an error. This is not durable deduplication or an exactly-once execution guarantee.
 
 #### Failure, revocation and visibility
-- Recheck recipient availability and peer authorization at delivery, not only admission. Recipient failure before delivery fails queued messages; do not replay them into a recreated runtime. Grant expiry or revocation before delivery fails affected queued peer messages. Already-delivered messages cannot be recalled.
+- Recheck recipient availability and peer authorization at delivery, not only admission. Recipient failure before delivery fails queued messages; do not replay them into a recreated runtime. Grant revocation or the end of its authorized lifetime before delivery fails affected queued peer messages. Already-delivered messages cannot be recalled.
 - Parent exit ends live delivery, with no survival or replay guarantee. Normal shutdown rejects messages that would trigger work as soon as shutdown begins. Parent loss never turns a pending permission request into approval.
 - Do not mirror peer exchanges or automatically push their failure notices into director context. Metadata, delivery failures and transcript-linked content remain inspectable, and the director may request a report or summary. Explicitly addressed messages to the director are distinct from mirroring peer exchanges.
 ### Permissions
-- SA-08 Requests specify tool, reason, scope, duration and correlation ID. Worker continues other tasks.
-- SA-09 Parent grants, narrows or denies. Grants expire and can be revoked; check at tool invocation.
-- SA-10 No parent may delegate greater authority than it possesses. Denied/unanswered requests never auto-grant.
-- SA-11 Verify Pi supports runtime tool changes; otherwise enforce via guarded tool proxy or safe-point reconfiguration.
+Behavior agreed through live discussion in [Define tool grants, revocation, and access requests](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/6). The ticket remains open for a Pi feasibility and final consistency check. These are required extension behaviors, not verified native Pi guarantees. The no-timed-expiry decision supersedes earlier expiry requirements, including the earlier messaging decision.
+
+#### Default grants and catalog
+- Workers receive `read`, `grep`, `find` and `ls` by default, plus narrowly defined worker-control operations for parent messaging, status reporting and permission requests. The owning parent can remove defaults. Defaults cannot exceed its authority and do not imply assignment-directory confinement.
+- `bash`, `write`, `edit`, peer messaging and MCP tools are opt-in. Workers never receive permission to spawn descendants or approve grants.
+- Grants identify exact tools, including provider identity for MCP tools. No wildcard grant automatically covers future catalog additions. Reconnecting the same verified provider does not renew or broaden authority; a changed provider identity requires fresh approval.
+- Discovery is not permission. Distinguish requestable tools, parent-forbidden tools and tools unavailable in the runtime. Loading a definition does not authorize execution. Forbidden and unavailable tools return distinct explanations rather than repeated approval prompts.
+
+#### Requests and decisions
+- SA-08 Requests specify exact tool, rationale, requested scope and a worker-scoped correlation ID. No duration is required. Workers continue unrelated work. Repeating the same ID and contents returns the existing request; conflicting reuse is an error.
+- SA-09 Only the owning parent grants, narrows or denies. Decisions identify the actual approved authority and notify the worker. Withdrawn requests and requests belonging to an ended runtime or lifetime cannot receive late approval.
+- SA-10 No parent may delegate greater authority than it currently possesses. Loss of parent authority removes corresponding worker authority. Denied and unanswered requests never grant access.
+- V1 supports named-tool grants and recipient-scoped peer messaging, without promising general path, command or network restrictions. A request's intended use is not an enforced restriction. In particular, `bash` authorizes shell execution, not only read-only commands or commands in a particular directory.
+- If a requested restriction cannot be enforced, the owning director judges whether granting the tool without that restriction is permissible. It may explicitly approve the actual broader authority, select a supported narrower alternative or deny. Do not silently discard restrictions or automatically reject solely because a restriction is unsupported. Record and notify the worker of the actual authority granted.
+
+#### Invocation enforcement and indirect access
+- Check authorization at each invocation, requiring a live authenticated connection to the owning parent's authorization mechanism. A disconnected worker cannot start calls using cached grants. Disconnection does not authorize continued work or imply automatic reconnection.
+- Direct calls and indirect calls through codemode, deferred tools, MCP or other wrappers follow the same authorization rules. Granting a wrapper does not implicitly grant its underlying tools; each underlying invocation must pass authorization.
+- If a wrapper cannot enforce underlying checks, treat it as a broad capability requiring explicit parent approval, analogous to shell access. Such approval never authorizes owner-only management operations or worker spawning. This is trusted-local authorization, not OS containment against malicious workers or shell/network effects.
+- Revocation blocks subsequent invocations, without automatically interrupting an already-authorized running tool or undoing effects. Cancellation and retirement use their separate shutdown rules. Peer authorization is also rechecked at message delivery.
+
+#### Grant lifetime and history
+- Grants have no timed expiry or renewal requirement. They survive turn completion, idle time and related follow-ups until explicitly revoked by the owning director or their authorized lifetime ends.
+- Retirement, worker-runtime death and parent-session termination end all grants. A recreated runtime requires fresh owning-director grants, including fresh authorization of any default set. Retained transcripts cannot restore permission. Disconnection immediately blocks new invocations as described above.
+- Parent and worker can inspect effective grants and request outcomes. Keep minimal transcript-linked history of grants, denials, explicit broader-access approvals, revocations and lifetime termination, recording who authorized what, for which worker, when and why. Do not duplicate tool payloads or transcripts. Retained history is evidence, not authority replayable after parent loss.
+
+#### Remaining feasibility check
+- SA-11 Reuse the completed Pi feasibility research to check invocation-time authorization, live tool changes and indirect access. Identify unsupported behavior or factual gaps before closing the permission decision. A visible tool allowlist or safe-point reconfiguration alone must not be treated as proof of invocation-time enforcement. No SDK hook, guarded proxy or other implementation is selected here.
+
 ### Lifecycle
 Resolved through [Define one-shot and ongoing session lifecycle](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/3). These are required extension behaviors, not claims about native Pi guarantees.
 
@@ -141,7 +166,7 @@ Retirement and parent exit prevent new turns, messages that trigger work and too
 #### Startup, runtime failure and disconnection
 Startup failure makes that worker unavailable, reports the failure and shuts down any partially started process using the bounded sequence. There is no automatic retry. The parent may explicitly spawn a replacement with a new worker identity. Preserve transcripts and files already created.
 
-Runtime death during a turn fails the turn and makes the worker unavailable. There is no automatic recreation. While the parent remains alive, it may explicitly recreate the runtime for the same worker only when the original assignment, active approved instruction/context revision and usable conversation can be restored. Never automatically replay an interrupted turn or tool call. If restoration is impossible, use a new replacement worker.
+Runtime death during a turn fails the turn and makes the worker unavailable. There is no automatic recreation. While the parent remains alive, it may explicitly recreate the runtime for the same worker only when the original assignment, active approved instruction/context revision and usable conversation can be restored. Never automatically replay an interrupted turn or tool call. Runtime recreation requires fresh owning-parent tool grants; restored conversation and instructions do not restore authority. If restoration is impossible, use a new replacement worker.
 
 Loss of the parent-worker control connection makes the worker unavailable even if its process may still be alive. The interrupted turn's outcome is unknown unless a result was already recorded. Attempt bounded shutdown of the known process. Do not accept follow-ups or launch a second runtime while the original might still execute. No automatic reconnection or reattachment is promised.
 
@@ -162,11 +187,11 @@ Transcripts remain available after exit, but are not a recoverable job registry.
 
 Example request:
 ```json
-{"type":"permission_request","request_id":"r-123","tool":"message_agent","scope":{"recipients":["worker-8"]},"reason":"Coordinate API contract","duration_seconds":1800}
+{"type":"permission_request","request_id":"r-123","tool":"message_agent","scope":{"recipients":["worker-8"]},"reason":"Coordinate API contract"}
 ```
 
 ## Security
-Authenticate parent-worker communication and enforce owner-only operations, least privilege, expiry and revocation. Record permission decisions and retirements with minimal transcript-linked markers. Cooperative tool permissions do not sandbox shell/network access; OS containment is outside v1. Bound live message queues. Preserve artifacts after cancellation unless cleanup is explicitly authorized.
+Authenticate parent-worker communication and enforce owner-only operations, least privilege, invocation-time checks, explicit revocation and grant lifetime termination. Record permission decisions and retirements with minimal transcript-linked markers. Cooperative tool permissions do not sandbox shell/network access; OS containment is outside v1. Bound live message queues. Preserve artifacts after cancellation unless cleanup is explicitly authorized.
 
 ## Acceptance criteria
 - [ ] Two workers run in distinct sessions/worktrees.
@@ -181,11 +206,17 @@ Authenticate parent-worker communication and enforce owner-only operations, leas
 - [ ] Normal delivery occurs between turns; authorized urgent messages may overtake normal ones at safe opportunities without interrupting tools. Acceptance order is preserved within each priority. Explicit reply waits keep incoming delivery operational and always have a finite deadline.
 - [ ] Configurable pending-message count and byte limits reject overload with `queue_full`, limit and usage; oversized messages are rejected. Delivery releases capacity. No eviction, blocked send or automatic retry occurs.
 - [ ] Duplicate live sends within the retained deduplication window return the existing message ID; conflicting reuse is rejected. No exactly-once execution or persistence guarantee is implied.
-- [ ] Worker failure with queued messages fails those messages without replay into a recreated runtime. Revocation or expiry before delivery fails queued peer messages; already-delivered messages cannot be recalled.
+- [ ] Worker failure with queued messages fails those messages without replay into a recreated runtime. Revocation or grant lifetime termination before delivery fails queued peer messages; already-delivered messages cannot be recalled.
 - [ ] Peer messages and their failures are not mirrored into director context. The director can explicitly inspect them or request a report or summary.
 - [ ] Compaction and controlled worker-runtime recreation preserve the assignment and active approved revision while the parent remains running. Missing approved contents pause work instead of silently loading replacements.
-- [ ] Worker requests a tool and continues work; approval takes effect safely.
-- [ ] Sibling grant allows only specified recipient; revocation and expiry work.
+- [ ] Default access contains only the parent-authorized inspection set and worker-control operations. Defaults can be removed and never exceed parent authority; shell, writes, peers and MCP tools are opt-in.
+- [ ] Discovery distinguishes requestable, forbidden and unavailable tools without granting execution. Exact tool and provider identities prevent future catalog additions or changed providers from inheriting grants.
+- [ ] Worker requests a tool with rationale, scope and correlation ID while continuing unrelated work. Duplicate identical requests return the existing request; conflicting reuse fails. Withdrawn or ended-runtime requests cannot receive late approval.
+- [ ] Unsupported restrictions trigger an explicit owning-director risk decision. Any approved broader access is accurately recorded and communicated; no restriction is silently dropped and unanswered requests never grant access.
+- [ ] Direct and indirect invocations require current authority and a live authenticated parent authorization connection. A wrapper grant alone cannot authorize underlying tools; a wrapper lacking underlying checks requires explicit broad-capability approval without permitting owner-only operations or worker spawning.
+- [ ] Revocation blocks new calls without interrupting already-authorized running tools or undoing effects. Sibling grants restrict recipients and are rechecked at delivery.
+- [ ] Grants have no timed expiry and survive completion, idle time and related follow-ups. Revocation, retirement, runtime death or parent-session termination ends access. Runtime recreation requires fresh grants; transcripts cannot restore authority.
+- [ ] Effective grants and request outcomes are inspectable with minimal transcript-linked authorization history, without duplicated payloads or replayable authority.
 - [ ] One-shot and ongoing work share one lifecycle. Completion records a result and confirms readiness before idling; a related follow-up or authorized message from idle starts another turn on the same assignment.
 - [ ] Safe cancellation preserves context and leaves the worker idle. Runtime-killing cancellation leaves it unavailable; cancellation remains pending until stopping is confirmed.
 - [ ] Recorded completion/cancellation ordering determines the outcome; late completion cannot override accepted cancellation. Partial results remain inspectable.

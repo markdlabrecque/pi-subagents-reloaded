@@ -30,6 +30,15 @@ _Avoid_: Message, follow-up as synonyms for assignment
 **Follow-up**:
 Related input that starts another turn on a worker's existing assignment. An authorized message to an idle worker is a follow-up, not a new assignment or a requirement for a separate wake operation.
 
+**Tool grant**:
+Authority approved by the owning parent for a worker to invoke an identified tool within its approved scope. It has no timed expiry and lasts until explicit revocation, worker retirement, worker-runtime death or parent-session termination.
+
+**Permission request**:
+A worker's correlated request to its owning parent for tool authority, with a rationale and requested scope. A request is distinct from a grant and does not itself authorize access.
+
+**Default inspection set**:
+The parent-removable starting selection of `read`, `grep`, `find` and `ls` for a worker, limited by its parent's authority. It does not imply confinement to the assignment directory.
+
 **Peer messaging grant**:
 Parent-approved authority for a worker to message specified workers in the same parent group. It includes permission to wake an idle recipient on its existing assignment.
 
