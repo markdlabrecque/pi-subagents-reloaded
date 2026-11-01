@@ -10,7 +10,7 @@ A reusable Pi extension to spawn isolated coding workers, communicate asynchrono
 4. Parent-worker messaging is asynchronous while the parent is running. Default delivery is at safe checkpoints; optional urgent delivery requires parent authorization. Durable delivery, replay and offline queues are out of scope.
 5. Workers can request more tools, with rationale, scope and duration, without blocking unrelated work. Parent can approve, narrow or deny.
 6. Sibling messaging is off by default. A worker may request a scoped messaging tool; the parent approves permitted recipients.
-7. Completion and retirement are separate: completed workers idle, retain context, and can be re-engaged or retired by parent.
+7. Completion and retirement are separate: completed workers idle and retain context. An authorized parent or peer message wakes an idle worker on its existing assignment; retirement remains parent-controlled.
 8. Agent milestones and code-level heartbeats coexist. Suggested heartbeat every 15 seconds, suspect after three missed heartbeats.
 9. The parent extension directly launches and manages workers. Parent exit shuts down workers. A parent crash may leave orphaned processes requiring manual cleanup; v1 promises neither continued operation nor automatic reattachment.
 10. No supervisor, background service or boot startup is required in v1. Persisted transcripts are records, not durable job recovery.
@@ -67,7 +67,7 @@ Resolved through [Define parent instructions and child context boundaries](https
 - No revision can change the original assignment, remove the extension's worker restrictions or grant tool authority by text alone. Tool grants remain separately changeable through the permission mechanism.
 
 #### Follow-ups and continuity
-- Every follow-up references the original assignment and carries the parent's affirmation that it belongs to that assignment. The parent extension validates the reference and authorization, not semantic relatedness. The worker must question or refuse an apparently unrelated request.
+- Every parent follow-up references the original assignment and carries the parent's affirmation that it belongs to that assignment. An authorized parent message to an idle worker is a follow-up; no separate wake operation is required. A recipient-scoped peer grant also authorizes messages to wake that recipient on its existing assignment. The parent extension validates the assignment reference and authorization, not semantic relatedness. The worker must question or refuse an apparently unrelated request from either sender.
 - Tests for an assigned API change are a related follow-up. An unrelated billing fix requires a new worker, even if the parent requests it in the same conversation.
 - Keep the original assignment and active approved instruction/context revision separately from conversational summaries and explicitly available after compaction or controlled worker-runtime recreation while the parent remains running. Restore the approved contents rather than rediscover current files or defaults. If restoration is impossible, pause for parent intervention. This does not promise worker reattachment after parent exit or crash.
 
@@ -77,10 +77,34 @@ The [Pi 1.4.0 feasibility research](https://github.com/markdlabrecque/pi-subagen
 Approved revisions, exact-content restoration, parent approval, follow-up validation and compaction continuity above are required extension behavior, not native Pi guarantees. Standard RPC has no system-prompt replacement command after startup. Safe revision application therefore needs a supported parent-managed SDK or extension mechanism, or controlled runtime recreation. This specification does not select an implementation or claim that plain RPC already provides one.
 
 ### Messages
-- SA-04 Identify live messages by sender, recipient, assignment, type, priority, timestamp and state. Exact acknowledgment semantics remain a messaging decision; persistence before acknowledgment is not required.
-- SA-05 Types: instruction, progress, completion, question, permission_request, permission_decision, ack, cancel, system_event.
-- SA-06 Bound live message queues and define ordering, failure reporting and wait behavior. No durable delivery, replay or offline queue guarantee.
-- SA-07 Checkpoint delivery by default; urgent must not interrupt unsafe tool calls.
+Resolved through [Define parent and peer message delivery](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/5). These are required extension behaviors within the live parent's lifetime, not native Pi delivery guarantees.
+
+#### Addressing, authority and message meaning
+- SA-04 Address the parent or stable worker identities within its worker group, not process or session IDs. The extension supplies authenticated sender identity rather than trusting a caller-supplied sender field. Peer grants authorize specific recipients; no cross-director messaging in v1.
+- Identify messages by message ID, authenticated sender, recipient, recipient assignment where applicable, type, priority, timestamp and delivery state. Correlated requests and replies reference the request they answer.
+- SA-05 Conversational messages may carry instructions, progress, questions, replies and notifications. Cancellation, permission decisions, instruction/context revisions and lifecycle transitions remain structured, authorized operations. Their notifications may appear in conversation, but a message type or its text never performs the operation or grants authority. A peer cannot cancel another worker or revise its standing instructions.
+- Ordinary messages remain subordinate to the immutable assignment and active approved instructions. A completion notification alone does not establish that lifecycle completion was recorded.
+
+#### Send, delivery and replies
+- Send returns promptly with accepted or rejected and a message ID. Accepted means admitted to the live queue, not delivered or acted upon. Delivered means inserted into the recipient's conversation at an allowed checkpoint, not understood or completed.
+- Delivery status and failure reasons are inspectable. Do not emit separate receipt messages or define generic acknowledged or processed states. When confirmation matters, request a correlated reply that states the relevant fact, such as whether the worker has stopped editing a file.
+- Waiting for a correlated reply is a separate operation with a finite deadline. Incoming messages must remain deliverable while waiting, so mutual waits cannot deadlock the messaging system. A timeout means no reply arrived within the deadline; it does not cancel the message or requested work. A known delivery failure ends an explicit wait with that failure.
+
+#### Wakeup, checkpoints and ordering
+- An authorized parent message wakes an idle worker and starts a turn on its existing assignment, without requiring a separate follow-up operation. A recipient-scoped peer messaging grant includes the same wake permission by default. Messages to an active worker never start an overlapping turn. Shutdown still prevents new work.
+- SA-07 Normal messages arrive between agent turns. An explicit reply wait must also permit incoming delivery rather than holding the recipient inaccessible until the turn ends. Parent-authorized urgent messages arrive at the next safe opportunity within an active turn. Neither priority interrupts an executing tool; urgent is not cancellation or a guarantee of immediate action.
+- Preserve acceptance order within each priority for a recipient. Urgent messages may overtake normal messages.
+
+#### Bounded live queues and duplicate sends
+- SA-06 Bound each recipient's pending queue by both message count and bytes, not tokens. Pending means accepted but not yet delivered; delivery releases queue capacity. Also bound individual message size.
+- Limits are configurable by the director within its overall resource budget; workers cannot raise them. Numeric defaults, aggregate budgets and bounded deduplication retention belong to [Define v1 resource, workspace and retention policies](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/11).
+- Reject a send that would exceed either queue limit immediately with `queue_full`, identifying the relevant limit and current usage. Reject oversized individual messages outright. Never silently evict accepted messages, block send waiting for capacity or automatically retry.
+- A sender-supplied request ID supports bounded live deduplication. Within the retained deduplication window, retrying the same send returns its existing message ID rather than delivering it twice. Reusing that ID with different contents is an error. This is not durable deduplication or an exactly-once execution guarantee.
+
+#### Failure, revocation and visibility
+- Recheck recipient availability and peer authorization at delivery, not only admission. Recipient failure before delivery fails queued messages; do not replay them into a recreated runtime. Grant expiry or revocation before delivery fails affected queued peer messages. Already-delivered messages cannot be recalled.
+- Parent exit ends live delivery, with no survival or replay guarantee. Normal shutdown rejects messages that would trigger work as soon as shutdown begins. Parent loss never turns a pending permission request into approval.
+- Do not mirror peer exchanges or automatically push their failure notices into director context. Metadata, delivery failures and transcript-linked content remain inspectable, and the director may request a report or summary. Explicitly addressed messages to the director are distinct from mirroring peer exchanges.
 ### Permissions
 - SA-08 Requests specify tool, reason, scope, duration and correlation ID. Worker continues other tasks.
 - SA-09 Parent grants, narrows or denies. Grants expire and can be revoked; check at tool invocation.
@@ -99,9 +123,9 @@ Resolved through [Define one-shot and ongoing session lifecycle](https://github.
 - `retiring`: permanently closing the worker and confirming shutdown.
 - `retired`: managed lifetime ended; cannot resume or recreate.
 
-Normal progression is created → starting → running → completing → idle. A related follow-up moves idle → running. Retirement is separate from turn completion and may begin from any non-retired state.
+Normal progression is created → starting → running → completing → idle. A related follow-up or authorized message moves idle → running. Retirement is separate from turn completion and may begin from any non-retired state.
 
-One-shot and ongoing work use the same lifecycle, without a permanent mode flag. One-shot means no follow-up is expected, not automatic retirement. Explicit follow-ups are accepted only when idle; reject early submissions with the current state rather than silently queueing them. Input during running or completing uses the separately defined live-messaging contract and cannot start overlapping turns.
+One-shot and ongoing work use the same lifecycle, without a permanent mode flag. One-shot means no follow-up is expected, not automatic retirement. A separate explicit follow-up operation, if exposed, is accepted only when idle; reject early submissions with the current state rather than silently queueing new turns. Ordinary authorized messages are accepted through the live-messaging contract, wake idle workers and never start overlapping turns during running or completing. The messaging decision supersedes the earlier requirement that only a separate explicit follow-up could wake an idle worker.
 
 Completed, cancelled and failed describe turn outcomes, not permanent worker states. Completion or safe cancellation leaves the worker idle. A failed turn may also leave it idle if the runtime remains usable. A failed tool command alone is not a failed turn. Cancellation pending is a flag on an active turn, not another worker state. Waiting for input or permission does not itself complete the turn.
 
@@ -149,11 +173,20 @@ Authenticate parent-worker communication and enforce owner-only operations, leas
 - [ ] A fresh worker receives only its explicit instruction/resource selection and selected supporting context, without unrelated parent history or automatic user-global instruction/skill discovery.
 - [ ] Changed skill or project instruction files do not alter the active revision. A parent-approved exact-content revision takes effect only at a safe checkpoint; pending and denied changes have no effect.
 - [ ] Parent-initiated revisions use the same mechanism. Ordinary messages cannot revise standing instructions, grant tools or change the original assignment.
-- [ ] Follow-ups carry the original assignment reference and parent affirmation. Invalid references are rejected; the worker questions an apparently unrelated request rather than accepting reassignment.
+- [ ] Parent follow-ups carry the original assignment reference and parent affirmation. Invalid references are rejected; the worker questions an apparently unrelated parent or peer request rather than accepting reassignment.
+- [ ] An authorized parent message wakes an idle worker without a separate follow-up operation. A recipient-scoped peer grant includes wake permission by default. Neither starts overlapping turns or bypasses shutdown or assignment boundaries.
+- [ ] Message addressing uses stable worker identities and extension-authenticated senders. Caller-supplied identities cannot impersonate a parent or peer; cross-director delivery is rejected.
+- [ ] Send reports accepted or rejected with a message ID. Delivery is inspectable, not proof of action. Confirmation uses correlated replies rather than automatic receipt messages or generic processed states.
+- [ ] Text labelled as a permission decision, cancellation or instruction revision cannot perform the corresponding authorized operation.
+- [ ] Normal delivery occurs between turns; authorized urgent messages may overtake normal ones at safe opportunities without interrupting tools. Acceptance order is preserved within each priority. Explicit reply waits keep incoming delivery operational and always have a finite deadline.
+- [ ] Configurable pending-message count and byte limits reject overload with `queue_full`, limit and usage; oversized messages are rejected. Delivery releases capacity. No eviction, blocked send or automatic retry occurs.
+- [ ] Duplicate live sends within the retained deduplication window return the existing message ID; conflicting reuse is rejected. No exactly-once execution or persistence guarantee is implied.
+- [ ] Worker failure with queued messages fails those messages without replay into a recreated runtime. Revocation or expiry before delivery fails queued peer messages; already-delivered messages cannot be recalled.
+- [ ] Peer messages and their failures are not mirrored into director context. The director can explicitly inspect them or request a report or summary.
 - [ ] Compaction and controlled worker-runtime recreation preserve the assignment and active approved revision while the parent remains running. Missing approved contents pause work instead of silently loading replacements.
 - [ ] Worker requests a tool and continues work; approval takes effect safely.
 - [ ] Sibling grant allows only specified recipient; revocation and expiry work.
-- [ ] One-shot and ongoing work share one lifecycle. Completion records a result and confirms readiness before idling; only an explicit related follow-up from idle starts another turn.
+- [ ] One-shot and ongoing work share one lifecycle. Completion records a result and confirms readiness before idling; a related follow-up or authorized message from idle starts another turn on the same assignment.
 - [ ] Safe cancellation preserves context and leaves the worker idle. Runtime-killing cancellation leaves it unavailable; cancellation remains pending until stopping is confirmed.
 - [ ] Recorded completion/cancellation ordering determines the outcome; late completion cannot override accepted cancellation. Partial results remain inspectable.
 - [ ] Startup failure reports unavailable, shuts down partial processes and preserves artifacts without automatic retry.
@@ -176,7 +209,7 @@ This decision map specifies behavior only. Implementation planning follows once 
 A supervisor, durable delivery/recovery and cross-director control may be reconsidered later if needed. They are not prerequisites or scheduled implementation phases for v1.
 
 ## Open questions
-Default idle timeout, maximum workers, live resource and queue limits, retention, worktree provisioning, crash/orphan reporting, actual Pi extension hooks, automatic director identity across entry points, safe live tool updates and the minimal optional Navigator contract.
+Default idle timeout, maximum workers, live resource and queue-limit values, aggregate budgets and deduplication retention, transcript retention, worktree provisioning, crash/orphan reporting, actual Pi extension hooks, automatic director identity across entry points, safe live tool updates and the minimal optional Navigator contract.
 
 ---
 

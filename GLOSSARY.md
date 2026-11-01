@@ -27,6 +27,12 @@ A worker whose runtime has failed or disconnected and cannot accept work. Unavai
 The worker's immutable original objective and scope. Later messages and related follow-ups do not replace it.
 _Avoid_: Message, follow-up as synonyms for assignment
 
+**Follow-up**:
+Related input that starts another turn on a worker's existing assignment. An authorized message to an idle worker is a follow-up, not a new assignment or a requirement for a separate wake operation.
+
+**Peer messaging grant**:
+Parent-approved authority for a worker to message specified workers in the same parent group. It includes permission to wake an idle recipient on its existing assignment.
+
 **Session**:
 The Pi conversation and its persisted transcript, distinct from the worker and the process executing it.
 _Avoid_: Worker as a synonym for session
