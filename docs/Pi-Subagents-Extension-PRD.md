@@ -173,13 +173,38 @@ Runtime death during a turn fails the turn and makes the worker unavailable. The
 
 Loss of the parent-worker control connection makes the worker unavailable even if its process may still be alive. The interrupted turn's outcome is unknown unless a result was already recorded. Attempt bounded shutdown of the known process. Do not accept follow-ups or launch a second runtime while the original might still execute. No automatic reconnection or reattachment is promised.
 
-Detailed detection, orphan reporting and manual cleanup remain with [Define parent-lifetime failure boundaries and orphan handling](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/9). Idle timeout and resource policy remain with [Define v1 resource, workspace and retention policies](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/11).
+Failure reporting and manual continuation follow the parent-lifetime contract below. Idle timeout and resource policy remain with [Define v1 resource, workspace and retention policies](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/11).
 ### Parent lifetime and failure boundaries
+Resolved through [Define parent-lifetime failure boundaries and orphan handling](https://github.com/markdlabrecque/pi-subagents-reloaded/issues/9). V1 preserves work for manual continuation, not automatic recovery of managed workers.
+
 - SA-16 Code-level process monitoring does not consume model tokens.
 - SA-17 Normal parent exit shuts down its workers and preserves transcripts and worktrees.
 - SA-18 Parent crashes may leave orphaned worker processes requiring manual cleanup. Continued operation, automatic reattachment and replay are not supported guarantees.
 - SA-19 Pending messages and permission requests need not survive parent loss and never become approvals because of it.
 - SA-20 No durable operation store, restart reconciliation, execution lease or global single-executor mechanism is required.
+
+#### Observable failures
+Existing process-exit and control-connection observations distinguish confirmed runtime death from loss of contact. A missing response or heartbeat alone does not prove process death. Report an unavailable worker whose stop is unconfirmed as possibly still running; never report uncertain shutdown as retirement or success. No automatic orphan discovery is required.
+
+| Failure | Observable contract | Continuation |
+| --- | --- | --- |
+| Normal parent exit or explicit retirement | Block new work and follow bounded shutdown, including active tools. Report uncertainty if stopping cannot be confirmed. Preserve artifacts. | No automatic continuation; retirement remains permanent. |
+| Parent crash | Shutdown hooks may never run. Workers or tools may remain running; no detection or termination deadline is promised. Live requests may be lost and pending approvals remain unapproved. | Manual verification or cleanup before assigning the worktree to a fresh worker. |
+| Confirmed worker death during a turn | Fail the turn and mark the worker unavailable. Partial work and external effects may remain. | No automatic retry. Explicit runtime recreation is limited to the existing live-parent lifecycle contract. |
+| Control connection lost | Mark unavailable and attempt bounded shutdown of the known process. Outcome is unknown unless already recorded; the process may still execute. New tool admissions require live parent authorization. | No automatic reconnect or second runtime while the original might execute. |
+| Partial startup failure | Report unavailable, attempt bounded cleanup of partial processes and preserve any artifacts already created. If work began, its effects may be uncertain. | No automatic retry; an explicit replacement uses a new worker identity. |
+
+#### Manual continuation after parent loss
+- The user verifies that the old worker has stopped, or stops it, before assigning the same worktree to a fresh worker. Use available session/transcript references and OS process inspection to identify it. A process name or stale PID alone is insufficient evidence; never recommend killing all Pi or Node processes. If identity or stopping is uncertain, do not start another worker in that worktree.
+- Preserve the worktree, transcript and partial output. Stopping a process does not authorize deleting these artifacts. Detached subprocesses and remote effects are not guaranteed to stop with the worker.
+- A fresh worker may continue the same ticket from the existing worktree using new parent-supplied instructions and explicitly selected context. It has a new worker identity, assignment and grants; this is not ownership transfer, reattachment or automatic restoration of the old worker. Reading files and retained transcripts to rebuild context is acceptable in v1.
+- Report the last observed operation where available and warn when its effects are unknown. The fresh worker inspects partial changes and external outcomes before an explicit retry. Never assume rollback, exactly-once effects or safe replay of an interrupted command.
+- No additional persistent process-identity registry, automatic takeover or context-reconstruction mechanism is required. Durable agents may be reconsidered if manual context rebuilding proves expensive, but are outside v1.
+
+#### Feasibility boundary
+The completed [Pi 1.4.0 feasibility research](https://github.com/markdlabrecque/pi-subagents-reloaded/blob/be45fb5d27f808123f168c50c114ff916e61c431/docs/research/pi-feasibility.md), particularly its subprocess lifecycle and persistence findings, supports this boundary. The host must observe process exits, EOF and connection failures; orderly shutdown hooks cannot be assumed after a crash. Transcripts restore recorded conversation, not processes, pending requests or evidence that an interrupted external operation is safe to repeat. Early startup may not create a transcript, and unfinished output may be missing. Preserve available artifacts without promising crash-complete records.
+
+OS-specific process-tree termination and provider-specific cancellation remain untested feasibility details for implementation validation, not stronger shutdown or rollback promises. No new factual investigation is needed to settle manual continuation.
 
 ## Data and API sketch
 Parent-local records cover workers, sessions, assignments, messages, permission requests, grants and instruction/context revisions. No database or storage stack is selected.
@@ -230,7 +255,10 @@ Authenticate parent-worker communication and enforce owner-only operations, leas
 - [ ] Retirement and parent exit immediately block new work and use configurable five-second cooperative and two-second termination grace periods before force-kill escalation, including active tools.
 - [ ] Retirement is irreversible and reported complete only after confirmed shutdown. Repeated requests do not reset the deadline; transcripts and worktrees remain intact.
 - [ ] Normal parent exit shuts down workers while preserving transcripts and worktrees.
-- [ ] Parent crash is reported as unsupported for automatic recovery; orphan cleanup and lost live requests are documented without implying safe continued work.
+- [ ] Parent crash has no detection or termination deadline guarantee. Manual orphan cleanup and lost live requests are documented without implying safe continued work or automatic recovery.
+- [ ] Unconfirmed stopping is reported as possibly still running, not retired; missing responses alone do not establish process death.
+- [ ] After parent loss, the user verifies or stops the original worker before a fresh worker continues the ticket in the preserved worktree. The fresh worker receives a new identity, assignment, selected context and grants, without reattachment or automatic context restoration.
+- [ ] Partial startup and interrupted operations preserve available artifacts and identify uncertain effects where observable. The fresh worker inspects before retrying; no automatic replay, rollback or exactly-once guarantee is implied.
 - [ ] Parent loss never approves a pending request.
 - [ ] Directors manage only their own worker groups. No cross-director authority or super-agent status exists in v1.
 - [ ] Top-level agents receive director identities automatically, with no opt-in; session resume preserves identity and a separate agent or fork gets a new one.
@@ -239,12 +267,12 @@ Authenticate parent-worker communication and enforce owner-only operations, leas
 - [ ] Missing or incompatible Navigator integration does not break standalone tools; viewing never grants control.
 
 ## Specification and implementation boundary
-This decision map specifies behavior only. Implementation planning follows once the remaining failure-boundary, integration and resource-policy decisions and final map consistency checks are resolved. Reuse the completed Pi feasibility research and the tool grant check; verify uncovered automatic-identity entry points and safe live instruction changes before treating them as supported. Execution-time authorization and live grant changes have specified contracts, but their end-to-end enforcement remains implementation work, not a verified Pi guarantee.
+This decision map specifies behavior only. Implementation planning follows once the remaining integration and resource-policy decisions and final map consistency checks are resolved. Reuse the completed Pi feasibility research and the tool grant check; verify uncovered automatic-identity entry points and safe live instruction changes before treating them as supported. Execution-time authorization and live grant changes have specified contracts, but their end-to-end enforcement remains implementation work, not a verified Pi guarantee.
 
 A supervisor, durable delivery/recovery and cross-director control may be reconsidered later if needed. They are not prerequisites or scheduled implementation phases for v1.
 
 ## Open questions
-Default idle timeout, maximum workers, live resource and queue-limit values, aggregate budgets and deduplication retention, transcript retention, worktree provisioning, crash/orphan reporting, automatic director identity across entry points, safe live instruction changes and the minimal optional Navigator contract.
+Default idle timeout, maximum workers, live resource and queue-limit values, aggregate budgets and deduplication retention, transcript retention, worktree provisioning, automatic director identity across entry points, safe live instruction changes and the minimal optional Navigator contract.
 
 ---
 
