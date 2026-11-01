@@ -7,6 +7,22 @@ Terms for parent-controlled workers and their assignment boundaries.
 **Worker**:
 A managed agent with one immutable original assignment. Its identity is distinct from its conversation and running executor.
 
+**Turn**:
+One episode of a worker's activity on its assignment, ending in completion, cancellation or failure. A related follow-up starts a new turn without changing the assignment.
+
+**Completion**:
+The successful end of a turn, distinct from the end of a worker's managed lifetime.
+_Avoid_: Retirement as a synonym for completion
+
+**Cancellation**:
+A request to stop the current turn without ending the worker's managed lifetime. Cancellation does not imply reversal of effects already produced.
+
+**Retirement**:
+The permanent end of a worker's managed lifetime, distinct from completion or cancellation of a turn.
+
+**Unavailable worker**:
+A worker whose runtime has failed or disconnected and cannot accept work. Unavailability is distinct from being idle or retired.
+
 **Assignment**:
 The worker's immutable original objective and scope. Later messages and related follow-ups do not replace it.
 _Avoid_: Message, follow-up as synonyms for assignment
